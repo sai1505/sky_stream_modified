@@ -1540,49 +1540,6 @@ fun CloudVideoPlayerScreen(
             }
         }
 
-        // ✅ ENHANCED: Quality Dialog with working controls
-        val qualityOptions = listOf(
-            "Max" to "Maximum Quality",
-            "Auto" to "Auto (Max Resolution)"
-        )
-
-        qualityOptions.forEach { (quality, label) ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        networkQuality = quality
-
-                        // Apply quality settings immediately
-                        val parametersBuilder = trackSelector.buildUponParameters()
-                        when (quality) {
-                            "Auto" -> {
-                                parametersBuilder.clearVideoSizeConstraints()
-                                adjustQualityForPerformance()
-                            }
-                            "Max" -> {
-                                parametersBuilder.clearVideoSizeConstraints()
-                                    .setForceHighestSupportedBitrate(true)
-                            }
-                        }
-                        trackSelector.setParameters(parametersBuilder.build())
-
-                        android.util.Log.d("CloudVideoPlayer", "Quality changed to: $quality")
-                        showQualityDialog = false
-                    }
-                    .padding(vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(
-                    selected = networkQuality == quality,
-                    onClick = null
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(label)
-            }
-        }
-
-
         // Subtitle Dialog
         if (showSubtitleDialog) {
             Dialog(onDismissRequest = { showSubtitleDialog = false }) {

@@ -61,7 +61,7 @@ sealed class AppScreen {
     object CloudVideoPlayer : AppScreen()
 }
 
-// Enhanced Custom Saver for AppScreen
+// Updated Custom Saver for AppScreen (removed CloudScreen)
 val AppScreenSaver = Saver<AppScreen, String>(
     save = { screen ->
         when (screen) {
@@ -89,6 +89,9 @@ fun SkyStreamApp() {
         mutableStateOf<AppScreen>(AppScreen.Main)
     }
 
+    // ✅ NEW: State to track which tab to show when returning to Main
+    var targetTabIndex by rememberSaveable { mutableIntStateOf(0) }
+
     // Local video states
     var selectedVideoId by rememberSaveable { mutableLongStateOf(-1L) }
     var selectedVideoUri by rememberSaveable { mutableStateOf("") }
@@ -107,6 +110,7 @@ fun SkyStreamApp() {
     when (currentScreen) {
         is AppScreen.Main -> {
             MainScreen(
+                initialTabIndex = targetTabIndex, // ✅ Pass the target tab index
                 onVideoSelected = { video, videos ->
                     // Store local video data in saveable state
                     selectedVideoId = video.id
@@ -122,6 +126,7 @@ fun SkyStreamApp() {
                         "${it.id}|${it.uri}|${it.displayName}|${it.duration}|${it.size}|${it.path}|${it.thumbnailPath ?: ""}"
                     }
 
+                    targetTabIndex = 0 // Reset to local tab
                     currentScreen = AppScreen.VideoPlayer
                 },
                 onCloudVideoSelected = { video, videos, authManager ->
@@ -166,6 +171,7 @@ fun SkyStreamApp() {
                     video = selectedVideo,
                     videoList = videoList,
                     onBackPressed = {
+                        targetTabIndex = 0 // Return to Local tab
                         currentScreen = AppScreen.Main
                     }
                 )
@@ -182,10 +188,11 @@ fun SkyStreamApp() {
                     videoList = cloudVideoList,
                     authManager = cloudAuthManager!!,
                     onBackPressed = {
-                        // Clear cloud video states when going back
+                        // Clear only video-specific states, keep auth
                         selectedCloudVideo = null
                         cloudVideoList = emptyList()
-                        cloudAuthManager = null
+                        // ✅ FIXED: Set target tab to Cloud (index 1) and return to Main
+                        targetTabIndex = 1
                         currentScreen = AppScreen.Main
                     }
                 )
@@ -200,13 +207,19 @@ fun SkyStreamApp() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    initialTabIndex: Int = 0, // ✅ NEW: Accept initial tab index
     onVideoSelected: (VideoItem, List<VideoItem>) -> Unit,
     onCloudVideoSelected: (DriveVideoFile, List<DriveVideoFile>, GoogleDriveAuthManager) -> Unit
 ) {
-    // Use rememberSaveable for navigation state to survive rotation
-    var currentIndex by rememberSaveable { mutableIntStateOf(0) }
+    // ✅ UPDATED: Initialize with the passed initial tab index
+    var currentIndex by rememberSaveable { mutableIntStateOf(initialTabIndex) }
     var showBar by remember { mutableStateOf(true) }
     val coroutineScope = rememberCoroutineScope()
+
+    // ✅ NEW: Update currentIndex when initialTabIndex changes
+    LaunchedEffect(initialTabIndex) {
+        currentIndex = initialTabIndex
+    }
 
     // Auto-hide timer effect
     LaunchedEffect(showBar, currentIndex) {
@@ -295,6 +308,7 @@ fun MainScreen(
     }
 }
 
+// Rest of your composables remain the same...
 @Composable
 fun CustomBottomNavigationBar(
     currentIndex: Int,

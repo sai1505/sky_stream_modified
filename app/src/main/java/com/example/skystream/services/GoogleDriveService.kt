@@ -133,20 +133,30 @@ class GoogleDriveService(
     suspend fun getVideoFiles(pageToken: String? = null): Result<Pair<List<DriveVideoFile>, String?>> {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Fetching video files with fast query...")
+                Log.d(TAG, "Fetching video files...")
+
+                // Test token validity first
+                val testRequest = driveService.about().get().setFields("user")
+                try {
+                    testRequest.execute()
+                    Log.d(TAG, "Token validation successful")
+                } catch (e: com.google.api.client.googleapis.json.GoogleJsonResponseException) {
+                    if (e.statusCode == 401) {
+                        Log.e(TAG, "Token expired during validation")
+                        return@withContext Result.failure(Exception("Authentication expired. Please sign in again."))
+                    }
+                }
 
                 val request = driveService.files().list().apply {
-                    // Simplified query for faster execution
                     q = "mimeType contains 'video/' and trashed = false and 'me' in owners"
                     spaces = "drive"
-                    // Reduced fields for faster response
                     fields = "nextPageToken, files(id, name, size, mimeType, thumbnailLink, modifiedTime)"
-                    pageSize = 50  // Smaller page size for faster initial load
+                    pageSize = 50
                     orderBy = "modifiedTime desc"
                     this.pageToken = pageToken
                 }
 
-                val result: FileList = request.execute()
+                val result = request.execute()
 
                 val videoFiles = result.files?.map { file ->
                     DriveVideoFile(
@@ -154,24 +164,23 @@ class GoogleDriveService(
                         name = file.name ?: "Unknown",
                         size = file.getSize(),
                         mimeType = file.mimeType ?: "",
-                        webViewLink = null, // Skip for speed
+                        webViewLink = null,
                         thumbnailLink = file.thumbnailLink,
-                        createdTime = null, // Skip for speed
+                        createdTime = null,
                         modifiedTime = file.modifiedTime?.toString()
                     )
                 } ?: emptyList()
 
-                Log.d(TAG, "Fast fetch complete: ${videoFiles.size} videos")
                 Result.success(Pair(videoFiles, result.nextPageToken))
 
             } catch (e: com.google.api.client.googleapis.json.GoogleJsonResponseException) {
                 when (e.statusCode) {
                     401 -> {
-                        Log.e(TAG, "Authentication failed - token expired")
+                        Log.e(TAG, "Authentication expired - 401 Unauthorized")
                         Result.failure(Exception("Authentication expired. Please sign in again."))
                     }
                     403 -> {
-                        Log.e(TAG, "Permission denied")
+                        Log.e(TAG, "Permission denied - 403 Forbidden")
                         Result.failure(Exception("Permission denied. Please check app permissions."))
                     }
                     else -> {
@@ -180,11 +189,12 @@ class GoogleDriveService(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error in fast video fetch", e)
+                Log.e(TAG, "Error fetching video files", e)
                 Result.failure(Exception("Failed to fetch videos: ${e.message}"))
             }
         }
     }
+
 
     // ✅ OPTIMIZED: Fast stream URL method
     suspend fun getVideoStreamUrl(fileId: String): Result<String> {

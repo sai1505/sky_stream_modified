@@ -4,9 +4,11 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import net.openid.appauth.*
@@ -14,6 +16,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.IOException
+import java.util.Timer
+import java.util.TimerTask
 import kotlin.coroutines.resume
 
 class GoogleDriveAuthManager(private val context: Context) {
@@ -64,41 +68,98 @@ class GoogleDriveAuthManager(private val context: Context) {
 
     // Add this method to GoogleDriveAuthManager.kt
     suspend fun refreshTokenIfNeeded(): Boolean = withContext(Dispatchers.IO) {
-        val currentAuthState = authStateManager.getCurrent()
-        if (currentAuthState == null) {
-            Log.w(TAG, "No auth state available for token refresh")
-            return@withContext false
-        }
+        try {
+            val currentAuthState = authStateManager.getCurrent()
+            if (currentAuthState == null) {
+                Log.w(TAG, "No auth state available for token refresh")
+                return@withContext false
+            }
 
-        if (!currentAuthState.needsTokenRefresh) {
-            Log.d(TAG, "Token refresh not needed")
-            return@withContext true
-        }
+            if (!currentAuthState.needsTokenRefresh) {
+                Log.d(TAG, "Token refresh not needed")
+                return@withContext true
+            }
 
-        return@withContext suspendCancellableCoroutine { continuation ->
-            currentAuthState.performActionWithFreshTokens(
-                AuthorizationService(context)
-            ) { accessToken, _, ex ->
-                if (ex != null) {
-                    Log.e(TAG, "Token refresh failed", ex)
-                    continuation.resume(false)
-                } else if (accessToken != null) {
-                    Log.d(TAG, "Token refreshed successfully")
+            Log.d(TAG, "Token refresh needed, attempting refresh...")
 
-                    // ✅ Fixed: Use current account email instead of getCurrentAccountId()
-                    val currentAccountEmail = _currentAccount.value?.email ?: ""
-                    if (currentAccountEmail.isNotEmpty()) {
-                        authStateManager.replace(currentAuthState, currentAccountEmail)
+            return@withContext suspendCancellableCoroutine { continuation ->
+                currentAuthState.performActionWithFreshTokens(
+                    AuthorizationService(context)
+                ) { accessToken, _, ex ->
+                    if (ex != null) {
+                        Log.e(TAG, "Token refresh failed", ex)
+                        continuation.resume(false)
+                    } else if (accessToken != null) {
+                        Log.d(TAG, "Token refreshed successfully")
+
+                        try {
+                            // Get account ID from current account
+                            val accountId = _currentAccount.value?.email ?: "default_account"
+
+                            // Update the AuthState with refreshed token
+                            authStateManager.replace(currentAuthState, accountId)
+
+                            Log.d(TAG, "AuthState updated successfully for account: $accountId")
+                            continuation.resume(true)
+
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error updating AuthState after token refresh", e)
+                            continuation.resume(false)
+                        }
+                    } else {
+                        Log.e(TAG, "Token refresh returned null access token")
+                        continuation.resume(false)
                     }
-
-                    continuation.resume(true)
-                } else {
-                    Log.e(TAG, "Token refresh returned null access token")
-                    continuation.resume(false)
                 }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Unexpected error during token refresh", e)
+            return@withContext false
         }
     }
+
+    // Add to GoogleDriveAuthManager.kt
+    suspend fun ensureValidToken(): Boolean {
+        return try {
+            val authState = authStateManager.getCurrent()
+
+            if (authState == null || !authState.isAuthorized) {
+                Log.w(TAG, "No valid auth state available")
+                return false
+            }
+
+            // Check if token needs refresh
+            if (authState.needsTokenRefresh) {
+                Log.d(TAG, "Token needs refresh, attempting...")
+                return refreshTokenIfNeeded()
+            }
+
+            // Token is valid
+            Log.d(TAG, "Token is valid and fresh")
+            true
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error validating token", e)
+            false
+        }
+    }
+
+    // Add to GoogleDriveAuthManager.kt
+    private fun startTokenRefreshTimer() {
+        // Refresh token every 45 minutes (before 1-hour expiration)
+        Timer().schedule(object : TimerTask() {
+            override fun run() {
+                if (isAuthenticated.value) {
+                    GlobalScope.launch {
+                        refreshTokenIfNeeded()
+                    }
+                }
+            }
+        }, 45 * 60 * 1000L, 45 * 60 * 1000L) // 45 minutes
+    }
+
+
+
 
 
     // Add token validation method

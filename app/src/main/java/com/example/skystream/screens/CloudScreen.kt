@@ -75,16 +75,18 @@ fun CloudScreen(
     }
 
 // Update the video loading LaunchedEffect in CloudScreen.kt
+    // In CloudScreen.kt, update the video loading LaunchedEffect
     LaunchedEffect(currentAccount, driveService) {
         if (isAuthenticated && driveService != null) {
             isLoadingVideos = true
+            errorMessage = null
 
-            // Check and refresh token before making API calls
-            val tokenRefreshed = authManager.refreshTokenIfNeeded()
-            if (!tokenRefreshed) {
+            // ✅ ADDED: Validate token before API call
+            val tokenValid = authManager.ensureValidToken()
+            if (!tokenValid) {
                 errorMessage = "Authentication expired. Please sign in again."
-                isLoadingVideos = false
                 authManager.signOut()
+                isLoadingVideos = false
                 return@LaunchedEffect
             }
 
@@ -94,7 +96,9 @@ fun CloudScreen(
                     isLoadingVideos = false
                 }
                 .onFailure { error ->
-                    if (error.message?.contains("401") == true || error.message?.contains("Unauthorized") == true) {
+                    if (error.message?.contains("401") == true ||
+                        error.message?.contains("Unauthorized") == true ||
+                        error.message?.contains("Authentication expired") == true) {
                         // Handle authentication error
                         errorMessage = "Authentication expired. Please sign in again."
                         authManager.signOut()
@@ -107,6 +111,7 @@ fun CloudScreen(
             videoFiles = emptyList()
         }
     }
+
 
 
     // Authorization launcher
