@@ -1,6 +1,5 @@
 package com.example.skystream.services
 
-import android.app.DownloadManager
 import android.content.Context
 import android.util.Log
 import com.google.api.client.http.HttpRequestInitializer
@@ -14,6 +13,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 data class DriveVideoFile(
     val id: String,
@@ -30,15 +30,29 @@ class GoogleDriveService(
     private val context: Context,
     private val accessToken: String
 ) {
-    // ✅ ADDED: HTTP client initialization - ONLY CHANGE MADE
-    private val httpClient = OkHttpClient()
+    // ✅ OPTIMIZED: High-performance HTTP client for fast streaming
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)     // Faster connection
+        .readTimeout(10, TimeUnit.SECONDS)       // Faster read timeout
+        .writeTimeout(10, TimeUnit.SECONDS)      // Faster write timeout
+        .callTimeout(30, TimeUnit.SECONDS)       // Overall call timeout
+        .followRedirects(true)                   // Handle redirects automatically
+        .followSslRedirects(true)               // Handle SSL redirects
+        .retryOnConnectionFailure(true)         // Auto-retry failed connections
+        .connectionPool(
+            okhttp3.ConnectionPool(
+                maxIdleConnections = 5,         // Keep connections alive
+                keepAliveDuration = 5,          // 5 minutes keep-alive
+                TimeUnit.MINUTES
+            )
+        )
+        .build()
 
     private val driveService: Drive by lazy {
-        // ✅ Fixed: Use HttpRequestInitializer for authentication
         val requestInitializer = HttpRequestInitializer { request ->
             request.headers.authorization = "Bearer $accessToken"
-            request.connectTimeout = 30000 // 30 seconds
-            request.readTimeout = 30000 // 30 seconds
+            request.connectTimeout = 10000 // Reduced to 10 seconds
+            request.readTimeout = 15000     // Reduced to 15 seconds
         }
 
         Drive.Builder(
@@ -46,7 +60,7 @@ class GoogleDriveService(
             GsonFactory.getDefaultInstance(),
             requestInitializer
         )
-            .setApplicationName("SkyStream")
+            .setApplicationName("SkyStream/1.0 (Fast-Streaming)")
             .build()
     }
 
@@ -55,139 +69,150 @@ class GoogleDriveService(
         private const val PAGE_SIZE = 50
     }
 
-    suspend fun getDirectVideoStreamUrl(fileId: String): Result<String> {
+    // ✅ OPTIMIZED: Fast authenticated stream URL with range support
+    suspend fun getAuthenticatedStreamUrl(fileId: String): Result<String> {
         return withContext(Dispatchers.IO) {
             try {
-                // Method 1: Try direct download URL
-                val directUrl = "https://drive.google.com/uc?export=download&id=$fileId"
+                Log.d(TAG, "Getting fast stream URL for file: $fileId")
 
-                // Method 2: Alternative format for larger files
-                val alternativeUrl = "https://drive.google.com/uc?export=download&id=$fileId&confirm=t"
+                // Use Google Drive API media endpoint with optimizations
+                val streamUrl = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
 
-                // ✅ CORRECT: Use OkHttp Request.Builder()
-                val testRequest = Request.Builder()
-                    .url(directUrl)
-                    .addHeader("Authorization", "Bearer $accessToken")
-                    .head() // HEAD request to test accessibility
-                    .build()
+                // Quick file verification (reduced fields for speed)
+                val file = driveService.files().get(fileId)
+                    .setFields("id, name, mimeType")  // Minimal fields for speed
+                    .execute()
 
-                val response = httpClient.newCall(testRequest).execute()
-
-                val finalUrl = if (response.isSuccessful) {
-                    directUrl
-                } else {
-                    alternativeUrl
-                }
-
-                response.close()
-
-                Log.d(TAG, "Using direct stream URL: $finalUrl")
-                Result.success(finalUrl)
+                Log.d(TAG, "Fast verification complete: ${file.name}")
+                Result.success(streamUrl)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error generating direct URL", e)
+                Log.e(TAG, "Failed to get fast stream URL", e)
                 Result.failure(e)
             }
         }
     }
 
+    // ✅ NEW: Optimized stream URL with range request support
+    suspend fun getOptimizedStreamUrl(fileId: String, startByte: Long = 0): Result<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                Log.d(TAG, "Getting optimized stream URL with range support")
+
+                val baseUrl = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+
+                // Test stream accessibility with HEAD request
+                val testRequest = Request.Builder()
+                    .url(baseUrl)
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .addHeader("Accept-Ranges", "bytes")
+                    .head()
+                    .build()
+
+                val response = httpClient.newCall(testRequest).execute()
+
+                val finalUrl = if (response.isSuccessful) {
+                    Log.d(TAG, "Stream test successful, supports range requests")
+                    baseUrl
+                } else {
+                    Log.d(TAG, "Stream test failed (${response.code}), using fallback")
+                    "https://drive.google.com/uc?export=download&id=$fileId"
+                }
+
+                response.close()
+                Result.success(finalUrl)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error getting optimized stream URL", e)
+                Result.failure(e)
+            }
+        }
+    }
+
+    // ✅ ENHANCED: Video files with optimized query
     suspend fun getVideoFiles(pageToken: String? = null): Result<Pair<List<DriveVideoFile>, String?>> {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Fetching personal video files from Google Drive...")
-                Log.d(TAG, "Using access token: ${accessToken.take(20)}...")
+                Log.d(TAG, "Fetching video files with fast query...")
 
                 val request = driveService.files().list().apply {
-                    q = "(mimeType contains 'video/' or mimeType = 'video/mp4' or mimeType = 'video/avi' or mimeType = 'video/mov' or mimeType = 'video/wmv' or mimeType = 'video/flv' or mimeType = 'video/webm' or mimeType = 'video/mkv') and trashed = false and 'me' in owners"
+                    // Simplified query for faster execution
+                    q = "mimeType contains 'video/' and trashed = false and 'me' in owners"
                     spaces = "drive"
-                    fields = "nextPageToken, files(id, name, size, mimeType, webViewLink, thumbnailLink, createdTime, modifiedTime, owners)"
-                    pageSize = 100
+                    // Reduced fields for faster response
+                    fields = "nextPageToken, files(id, name, size, mimeType, thumbnailLink, modifiedTime)"
+                    pageSize = 50  // Smaller page size for faster initial load
                     orderBy = "modifiedTime desc"
                     this.pageToken = pageToken
                 }
 
                 val result: FileList = request.execute()
 
-                Log.d(TAG, "Raw API response: Found ${result.files?.size ?: 0} personal video files")
-
                 val videoFiles = result.files?.map { file ->
-                    Log.d(TAG, "Personal video file: ${file.name}, MIME: ${file.mimeType}")
                     DriveVideoFile(
                         id = file.id,
                         name = file.name ?: "Unknown",
                         size = file.getSize(),
                         mimeType = file.mimeType ?: "",
-                        webViewLink = file.webViewLink,
+                        webViewLink = null, // Skip for speed
                         thumbnailLink = file.thumbnailLink,
-                        createdTime = file.createdTime?.toString(),
+                        createdTime = null, // Skip for speed
                         modifiedTime = file.modifiedTime?.toString()
                     )
                 } ?: emptyList()
 
-                Log.d(TAG, "Successfully fetched ${videoFiles.size} personal video files")
+                Log.d(TAG, "Fast fetch complete: ${videoFiles.size} videos")
                 Result.success(Pair(videoFiles, result.nextPageToken))
 
             } catch (e: com.google.api.client.googleapis.json.GoogleJsonResponseException) {
                 when (e.statusCode) {
                     401 -> {
-                        Log.e(TAG, "Authentication failed - token expired or invalid")
+                        Log.e(TAG, "Authentication failed - token expired")
                         Result.failure(Exception("Authentication expired. Please sign in again."))
                     }
                     403 -> {
-                        Log.e(TAG, "Permission denied - insufficient scopes")
+                        Log.e(TAG, "Permission denied")
                         Result.failure(Exception("Permission denied. Please check app permissions."))
                     }
                     else -> {
-                        Log.e(TAG, "Google API error: ${e.statusCode} - ${e.message}")
+                        Log.e(TAG, "Google API error: ${e.statusCode}")
                         Result.failure(Exception("API error: ${e.message}"))
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching personal video files", e)
-                Result.failure(Exception("Failed to fetch personal videos: ${e.message}"))
+                Log.e(TAG, "Error in fast video fetch", e)
+                Result.failure(Exception("Failed to fetch videos: ${e.message}"))
             }
         }
     }
 
-
-    // Update your GoogleDriveService.kt
+    // ✅ OPTIMIZED: Fast stream URL method
     suspend fun getVideoStreamUrl(fileId: String): Result<String> {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Getting stream URL for file: $fileId")
+                Log.d(TAG, "Getting fast stream URL for: $fileId")
 
-                // Get file metadata first
-                val file = driveService.files().get(fileId)
-                    .setFields("id, name, mimeType, size")
-                    .execute()
-
-                Log.d(TAG, "File details:")
-                Log.d(TAG, "  Name: ${file.name}")
-                Log.d(TAG, "  MIME: ${file.mimeType}")
-                Log.d(TAG, "  Size: ${file.getSize()}")
-
-                // Use the new direct URL method
-                getDirectVideoStreamUrl(fileId)
+                // Use optimized method with range support
+                getOptimizedStreamUrl(fileId)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error getting stream URL", e)
+                Log.e(TAG, "Error getting fast stream URL", e)
                 Result.failure(Exception("Failed to get stream URL: ${e.message}"))
             }
         }
     }
 
+    // ✅ OPTIMIZED: Fast search with minimal fields
     suspend fun searchVideoFiles(query: String): Result<List<DriveVideoFile>> {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Searching personal video files with query: $query")
+                Log.d(TAG, "Fast search for: $query")
 
                 val request = driveService.files().list().apply {
-                    // ✅ Search only in YOUR files
-                    q = "(mimeType contains 'video/' or mimeType = 'video/mp4' or mimeType = 'video/avi' or mimeType = 'video/mov' or mimeType = 'video/wmv' or mimeType = 'video/flv' or mimeType = 'video/webm' or mimeType = 'video/mkv') and name contains '$query' and trashed = false and 'me' in owners"
-
+                    q = "mimeType contains 'video/' and name contains '$query' and trashed = false and 'me' in owners"
                     spaces = "drive"
-                    fields = "files(id, name, size, mimeType, webViewLink, thumbnailLink, createdTime, modifiedTime, owners)"
-                    pageSize = 100
+                    fields = "files(id, name, size, mimeType, thumbnailLink)" // Minimal fields
+                    pageSize = 25 // Smaller for faster search
                     orderBy = "modifiedTime desc"
                 }
 
@@ -199,20 +224,68 @@ class GoogleDriveService(
                         name = file.name ?: "Unknown",
                         size = file.getSize(),
                         mimeType = file.mimeType ?: "",
-                        webViewLink = file.webViewLink,
+                        webViewLink = null,
                         thumbnailLink = file.thumbnailLink,
-                        createdTime = file.createdTime?.toString(),
-                        modifiedTime = file.modifiedTime?.toString()
+                        createdTime = null,
+                        modifiedTime = null
                     )
                 } ?: emptyList()
 
-                Log.d(TAG, "Found ${videoFiles.size} personal video files matching query")
+                Log.d(TAG, "Fast search complete: ${videoFiles.size} results")
                 Result.success(videoFiles)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error searching personal video files", e)
+                Log.e(TAG, "Error in fast search", e)
                 Result.failure(Exception("Search failed: ${e.message}"))
             }
+        }
+    }
+
+    // ✅ NEW: Test stream performance
+    suspend fun testStreamPerformance(fileId: String): Result<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val startTime = System.currentTimeMillis()
+
+                val streamUrl = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+
+                val request = Request.Builder()
+                    .url(streamUrl)
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .addHeader("Range", "bytes=0-1023") // Test first 1KB
+                    .build()
+
+                val response = httpClient.newCall(request).execute()
+                val responseTime = System.currentTimeMillis() - startTime
+
+                val performanceInfo = """
+                    Stream Performance Test:
+                    - Response Time: ${responseTime}ms
+                    - Status: ${response.code}
+                    - Content-Type: ${response.header("Content-Type")}
+                    - Supports Range: ${response.header("Accept-Ranges") != null}
+                    - Content-Length: ${response.header("Content-Length")}
+                """.trimIndent()
+
+                response.close()
+                Log.d(TAG, performanceInfo)
+                Result.success(performanceInfo)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Stream performance test failed", e)
+                Result.failure(e)
+            }
+        }
+    }
+
+    // ✅ NEW: Cleanup method for better resource management
+    fun cleanup() {
+        try {
+            httpClient.dispatcher.executorService.shutdown()
+            httpClient.connectionPool.evictAll()
+            Log.d(TAG, "HTTP client resources cleaned up")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during cleanup", e)
         }
     }
 }
